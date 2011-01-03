@@ -228,14 +228,6 @@ add_binds("insert", {
 
 add_binds({"command", "search"}, {
     key({"Shift"},   "Insert",  function (w) w:insert_cmd(luakit.get_selection()) end),
-    key({"Control"}, "w",       function (w) w:del_word() end),
-    key({"Control"}, "u",       function (w) w:del_line() end),
-    key({"Control"}, "a",       function (w) w:beg_line() end),
-    key({"Control"}, "e",       function (w) w:end_line() end),
-    key({"Control"}, "f",       function (w) w:forward_char() end),
-    key({"Control"}, "b",       function (w) w:backward_char() end),
-    key({"Mod1"},    "f",       function (w) w:forward_word() end),
-    key({"Mod1"},    "b",       function (w) w:backward_word() end),
 })
 
 -- Switching tabs with Mod1+{1,2,3,...}

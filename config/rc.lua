@@ -81,6 +81,10 @@ require "taborder"
 -- Save web history
 require "history"
 
+-- Add readline binds to input bar
+require "readline"
+add_binds({"command", "search"}, readline.make_binds())
+
 require "follow_selected"
 require "go_input"
 require "go_next_prev"
