@@ -86,6 +86,9 @@ require "go_input"
 require "go_next_prev"
 require "go_up"
 
+-- edit form fields (textarea, input) in an external editor
+require "itsalltext"
+
 -----------------------------
 -- End user script loading --
 -----------------------------
