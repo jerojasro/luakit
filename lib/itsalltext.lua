@@ -6,6 +6,7 @@
 local string = string
 local io = io
 local os = os
+local math = math
 
 local luakit = luakit
 local add_binds = add_binds
@@ -31,7 +32,7 @@ local js_set_text = [==[
 
 local function get_temp_filename(uri)
     local fn = string.match(string.gsub(uri, "%w+://", ""), "(.-)/.*")
-    return string.format("%s/iat_%s_.txt", luakit.data_dir, fn)
+    return string.format("%s/iat_%s_%d.txt", luakit.data_dir, fn, math.random(5000))
 end
 
 local function call_external_editor(w)
@@ -42,6 +43,7 @@ local function call_external_editor(w)
     if #curr_text < #sentinel then return end
     -- remove sentinel text
     curr_text = string.sub(curr_text, 1 + #sentinel)
+    -- TODO make sure fn doesn't exist
     local fn = get_temp_filename(view.uri)
     local fd, err = io.open(fn, "w")
     if not fd then return end
