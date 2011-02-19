@@ -27,7 +27,7 @@ local js_get_text = [==[
 
 local js_set_text = [==[
     (function () {
-        document.activeElement.value = %q;
+        document.activeElement.value = "%s";
     })()]==]
 
 local function get_temp_filename(uri)
@@ -60,8 +60,10 @@ local function call_external_editor(w)
     end
     curr_text = fd:read("*a")
     fd:close()
-    view:eval_js(string.format(js_set_text, curr_text), "itsalltext.lua:js_set_text")
     os.remove(fn)
+    curr_text = string.gsub(curr_text, "\"", "\\\"")
+    curr_text = string.gsub(curr_text, "\n", "\\n")
+    view:eval_js(string.format(js_set_text, curr_text), "itsalltext.lua:js_set_text")
 end
 
 add_binds("insert", {
