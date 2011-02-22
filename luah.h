@@ -27,6 +27,18 @@
 #include "common/luaobject.h"
 #include "common/lualib.h"
 
+typedef struct proc_callback_data_t {
+    lua_State *L;
+    gint stdout_fd;
+    gint stderr_fd;
+} proc_callback_data_t;
+
+typedef enum {
+    TERM_EXIT = 1,
+    TERM_SIGNAL,
+    TERM_UNKNOWN
+} proc_exit_status_t;
+
 #define luaH_deprecate(L, repl) \
     do { \
         luaH_warn(L, "%s: This function is deprecated and will be removed, see %s", \

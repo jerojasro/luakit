@@ -19,7 +19,9 @@
  *
  */
 
+#include <glib/gprintf.h>
 #include <gtk/gtk.h>
+#include <glib.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <webkit/webkit.h>
@@ -527,22 +529,154 @@ luaH_luakit_spawn_sync(lua_State *L)
     return 3;
 }
 
+/*
+ * Reads all the text of the file associated with fd, and stores both the text
+ * read (in *ptr_out) and the amount of read text (*len_out)
+ *
+ * It reports back errors to the Lua State
+ *
+ * NOTES:
+ *   - Caller must release the contents of *ptr_out using g_free
+ *   - fd is closed as part of this function, since it reads all the text of
+ *     the file
+ * */
+void read_proc_output(int fd, lua_State *L, gchar **ptr_out, gsize *len_out) {
+    GIOChannel* g_out = g_io_channel_unix_new(fd);
+    GError *e = NULL;
+    g_io_channel_read_to_end(g_out, ptr_out, len_out, &e);
+    if (e) {
+        lua_pushstring(L, e->message);
+        g_clear_error(&e);
+        g_free(*ptr_out);
+        g_io_channel_unref(g_out);
+        g_io_channel_shutdown(g_out, 1, NULL);
+        close(fd);
+        lua_error(L);
+    }
+    g_io_channel_unref(g_out);
+    g_io_channel_shutdown(g_out, 1, NULL);
+    close(fd);
+}
+
+/* Calls the Lua function defined as callback for a (async) spawned process
+ *
+ * \param pid The PID of the process that has just finished
+ * \param status status information about the spawned process. See waitpid(2)
+ * \param data pointer to a proc_callback_data_t structure
+ *
+ * The called Lua function receives 4 arguments:
+ *
+ * Exit type: one of: TERM_EXIT (normal exit), TERM_SIGNAL (terminated by
+ *            signal), TERM_UNKNOWN (another reason)
+ * Exit number: When normal exit happened, the exit code of the process. When
+ *              finished by a signal, the signal number. -1 otherwise.
+ */
+void async_callback_handler(GPid pid, gint status, gpointer data) {
+
+    proc_callback_data_t * cb = (proc_callback_data_t *)data;
+    lua_State *L = cb->L;
+    int stdout_fd = cb->stdout_fd;
+    int stderr_fd = cb->stderr_fd;
+    g_free(cb);
+
+    gchar *str_stdout = NULL;
+    gsize len_stdout;
+    read_proc_output(stdout_fd, L, &str_stdout, &len_stdout);
+    gchar *str_stderr = NULL;
+    gsize len_stderr;
+    read_proc_output(stderr_fd, L, &str_stderr, &len_stderr);
+
+    // fetch callbacks table
+    lua_pushliteral(L, LUAKIT_CALLBACKS_REGISTRY_KEY);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+
+    // get callback function for the given PID (callbacks[pid])
+    lua_pushlightuserdata(L, (void *)pid);
+    lua_rawget(L, -2);
+
+    proc_exit_status_t exit_type;
+    int exit_num = 0;
+    if (WIFEXITED(status)) {
+        exit_type = TERM_EXIT;
+        exit_num = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        exit_type = TERM_SIGNAL;
+        exit_num = WTERMSIG(status);
+    } else {
+        exit_type = TERM_UNKNOWN;
+        exit_num = -1;
+    }
+    lua_pushinteger(L, exit_type);
+    lua_pushinteger(L, exit_num);
+    lua_pushlstring(L, str_stdout, len_stdout);
+    lua_pushlstring(L, str_stderr, len_stderr);
+    g_free(str_stdout);
+    g_free(str_stderr);
+    lua_call(L, 4, 0);
+
+    // free callbacks[pid]
+    lua_pushlightuserdata(L, (void *)pid);
+    lua_pushnil(L);
+    lua_rawset(L, -3);
+
+    // stack cleanup - remove callbacks table from it
+    lua_remove(L, -1);
+
+    g_spawn_close_pid(pid);
+}
+
 /* Spawns a command.
- * \param L The Lua VM state.
+ * \param L The Lua VM state. Contains a Lua function, the callback handler to use
+ * when the command finishes.
  * \return The number of elements pushed on stack (0).
  */
 static gint
 luaH_luakit_spawn(lua_State *L)
 {
     GError *e = NULL;
+    GPid pid = 0;
     const gchar *command = luaL_checkstring(L, 1);
-    g_spawn_command_line_async(command, &e);
+    gint argc = 0;
+    gchar **argv = NULL;
+    g_shell_parse_argv(command, &argc, &argv, &e);
+    if (e) {
+        lua_pushstring(L, e->message);
+        g_clear_error(&e);
+        g_strfreev(argv);
+        lua_error(L);
+    }
+    proc_callback_data_t *cb = g_new0(proc_callback_data_t, 1);
+    cb->L = L;
+    g_spawn_async_with_pipes(NULL, argv, NULL, 
+            G_SPAWN_DO_NOT_REAP_CHILD|G_SPAWN_SEARCH_PATH, NULL, NULL, &pid,
+            NULL, &(cb->stdout_fd), &(cb->stderr_fd), &e);
+    g_strfreev(argv);
     if(e)
     {
         lua_pushstring(L, e->message);
         g_clear_error(&e);
+        g_free(cb);
         lua_error(L);
     }
+    int CB_FUNC_IDX = 2;
+
+    int cb_type = lua_type(L, CB_FUNC_IDX);
+    if (cb_type == LUA_TNONE) {
+        g_free(cb); // no callback, hence no callback data needed
+        return 0;
+    }
+
+    if (cb_type != LUA_TFUNCTION) {
+        g_free(cb);
+        luaL_typerror(L, CB_FUNC_IDX, lua_typename(L, LUA_TFUNCTION));
+    }
+
+    lua_pushliteral(L, LUAKIT_CALLBACKS_REGISTRY_KEY);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    lua_pushlightuserdata(L, (void *)pid);
+    lua_pushvalue(L, CB_FUNC_IDX);
+    lua_rawset(L, -3);
+    g_child_watch_add(pid, async_callback_handler, cb);
     return 0;
 }
 
@@ -598,6 +732,10 @@ luaH_luakit_index(lua_State *L)
       PI_CASE(WEBKIT_MICRO_VERSION, webkit_micro_version())
       PI_CASE(WEBKIT_USER_AGENT_MAJOR_VERSION, WEBKIT_USER_AGENT_MAJOR_VERSION)
       PI_CASE(WEBKIT_USER_AGENT_MINOR_VERSION, WEBKIT_USER_AGENT_MINOR_VERSION)
+
+      PI_CASE(PROC_TERM_EXIT, TERM_EXIT)
+      PI_CASE(PROC_TERM_SIGNAL, TERM_SIGNAL)
+      PI_CASE(PROC_TERM_UNKNOWN, TERM_UNKNOWN)
 
       case L_TK_WINDOWS:
         lua_newtable(L);
@@ -723,6 +861,18 @@ luaH_dofunction_on_error(lua_State *L)
     return 1;
 }
 
+/* creates a table (with an empty metatable) in the Lua registry to store the
+ * Lua callback functions associtated to processes spawned via
+ * luaH_luakit_spawn */
+void
+luaH_processcallbacks_setup(lua_State *L) {
+    lua_pushliteral(L, LUAKIT_CALLBACKS_REGISTRY_KEY);
+    lua_newtable(L);
+    lua_newtable(L);
+    lua_setmetatable(L, -2);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+}
+
 void
 luaH_init(void)
 {
@@ -752,6 +902,7 @@ luaH_init(void)
     luaH_fixups(L);
 
     luaH_object_setup(L);
+    luaH_processcallbacks_setup(L);
 
     /* Export luakit lib */
     luaH_openlib(L, "luakit", luakit_lib, luakit_lib);
