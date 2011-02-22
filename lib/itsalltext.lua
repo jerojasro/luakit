@@ -7,25 +7,14 @@
 --
 -- get text from selected element
 --
--- define JS callback, and store it in a table inside document. return the key
--- for the JS table callback to the lua side. The defined JS callback must
--- store as a closure the element whose text we'll modify, and receive such
--- text as its only argument
+-- define JS callback, and store it in a variable global for the document
+-- (IAT_CB).  The defined JS callback must store as a closure the element whose
+-- text we'll modify, and receive such text as its only argument
 --
--- create a lua callback that stores the key to the js callback, and stores the
--- proper luakit tab. These data must be stored as a closure.
+-- create a lua callback that stores the proper luakit tab, via closures.
 --
--- when editing finishes, execute a chunk of JS that does the following:
--- fetches the function holding the element whose text we are editing, and calls
--- it. The new text must be interpolated in the JS code string, after being
--- properly escaped
---
---
--- NOTES:
--- How to fetch the current tab:
---
--- 06:41 < mason-l> It's just a webview widget in each of the notebook tabs so just `local 
---                  view = notebook:atindex(1)` to get the first tab.
+-- when editing finishes, execute a chunk of JS that calls the JS function that
+-- sets the field text, and deletes such function
 
 local string = string
 local io = io
@@ -46,12 +35,20 @@ local js_get_text = [==[
         if (!input_focused) {
             return "";
         }
-        return "%s" + document.activeElement.value;
+
+        if (typeof window.IAT_CB != 'undefined') {
+            alert("You are already editing something!");
+            return "";
+        }
+        var act_el = document.activeElement;
+        window.IAT_CB = function(new_text) {act_el.value = new_text;};
+        return "%s" + act_el.value;
     })()]==]
 
 local js_set_text = [==[
     (function () {
-        document.activeElement.value = "%s";
+        window.IAT_CB("%s");
+        delete window.IAT_CB;
     })()]==]
 
 local function get_temp_filename(uri)
@@ -81,19 +78,27 @@ local function call_external_editor(w)
     fd:close()
     
     local editor_cmd = get_editor()
-    luakit.spawn_sync(string.format("%s %q", editor_cmd, fn))
-
-    fd, err = io.open(fn, "r")
-    if not fd then
-        w:warning("Could not read text back!")
-        return
+    local function editor_callback(n, m, stdout, stderr)
+        view_idx = w.tabs:indexof(view)
+        if not view_idx then
+            w:warning("You closed the tab, dude/gal!")
+            os.remove(fn)
+            return
+        end
+        fd, err = io.open(fn, "r")
+        if not fd then
+            w:warning("Could not read text back!")
+            return
+        end
+        curr_text = fd:read("*a")
+        fd:close()
+        os.remove(fn)
+        curr_text = string.gsub(curr_text, "\"", "\\\"")
+        curr_text = string.gsub(curr_text, "\n", "\\n")
+        view:eval_js(string.format(js_set_text, curr_text), "itsalltext.lua:js_set_text")
+        w:goto_tab(w.tabs:indexof(view))
     end
-    curr_text = fd:read("*a")
-    fd:close()
-    os.remove(fn)
-    curr_text = string.gsub(curr_text, "\"", "\\\"")
-    curr_text = string.gsub(curr_text, "\n", "\\n")
-    view:eval_js(string.format(js_set_text, curr_text), "itsalltext.lua:js_set_text")
+    luakit.spawn(string.format("%s %q", editor_cmd, fn), editor_callback)
 end
 
 add_binds("insert", {
