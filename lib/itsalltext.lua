@@ -59,6 +59,12 @@ local function get_temp_filename(uri)
     return string.format("%s/iat_%s_%d.txt", luakit.data_dir, fn, math.random(5000))
 end
 
+local function get_editor()
+    -- TODO write me. refactor editor selection, so it is a function. don't forget
+    -- to check other lua modules that do use the editor (formfiller)
+    return "gvim -f"
+end
+
 local function call_external_editor(w)
     local view = w:get_current()
     local sentinel = "X"
@@ -74,7 +80,7 @@ local function call_external_editor(w)
     fd:write(curr_text)
     fd:close()
     
-    local editor_cmd = "gvim -f"
+    local editor_cmd = get_editor()
     luakit.spawn_sync(string.format("%s %q", editor_cmd, fn))
 
     fd, err = io.open(fn, "r")
