@@ -3,6 +3,30 @@
 -- @author Javier Rojas &lt;jerojasro@devnull.li&gt;        --
 --------------------------------------------------------------
 
+-- Design:
+--
+-- get text from selected element
+--
+-- define JS callback, and store it in a table inside document. return the key
+-- for the JS table callback to the lua side. The defined JS callback must
+-- store as a closure the element whose text we'll modify, and receive such
+-- text as its only argument
+--
+-- create a lua callback that stores the key to the js callback, and stores the
+-- proper luakit tab. These data must be stored as a closure.
+--
+-- when editing finishes, execute a chunk of JS that does the following:
+-- fetches the function holding the element whose text we are editing, and calls
+-- it. The new text must be interpolated in the JS code string, after being
+-- properly escaped
+--
+--
+-- NOTES:
+-- How to fetch the current tab:
+--
+-- 06:41 < mason-l> It's just a webview widget in each of the notebook tabs so just `local 
+--                  view = notebook:atindex(1)` to get the first tab.
+
 local string = string
 local io = io
 local os = os
