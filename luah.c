@@ -529,42 +529,13 @@ luaH_luakit_spawn_sync(lua_State *L)
     return 3;
 }
 
-/*
- * Reads all the text of the file associated with fd, and stores both the text
- * read (in *ptr_out) and the amount of read text (*len_out)
- *
- * It reports back errors to the Lua State
- *
- * NOTES:
- *   - Caller must release the contents of *ptr_out using g_free
- *   - fd is closed as part of this function, since it reads all the text of
- *     the file
- * */
-void read_proc_output(int fd, lua_State *L, gchar **ptr_out, gsize *len_out) {
-    GIOChannel* g_out = g_io_channel_unix_new(fd);
-    GError *e = NULL;
-    g_io_channel_read_to_end(g_out, ptr_out, len_out, &e);
-    if (e) {
-        lua_pushstring(L, e->message);
-        g_clear_error(&e);
-        g_free(*ptr_out);
-        g_io_channel_unref(g_out);
-        g_io_channel_shutdown(g_out, 1, NULL);
-        close(fd);
-        lua_error(L);
-    }
-    g_io_channel_unref(g_out);
-    g_io_channel_shutdown(g_out, 1, NULL);
-    close(fd);
-}
-
 /* Calls the Lua function defined as callback for a (async) spawned process
  *
  * \param pid The PID of the process that has just finished
  * \param status status information about the spawned process. See waitpid(2)
- * \param data pointer to a proc_callback_data_t structure
+ * \param data pointer to the Lua VM state
  *
- * The called Lua function receives 4 arguments:
+ * The called Lua function receives 2 arguments:
  *
  * Exit type: one of: TERM_EXIT (normal exit), TERM_SIGNAL (terminated by
  *            signal), TERM_UNKNOWN (another reason)
@@ -572,19 +543,7 @@ void read_proc_output(int fd, lua_State *L, gchar **ptr_out, gsize *len_out) {
  *              finished by a signal, the signal number. -1 otherwise.
  */
 void async_callback_handler(GPid pid, gint status, gpointer data) {
-
-    proc_callback_data_t * cb = (proc_callback_data_t *)data;
-    lua_State *L = cb->L;
-    int stdout_fd = cb->stdout_fd;
-    int stderr_fd = cb->stderr_fd;
-    g_free(cb);
-
-    gchar *str_stdout = NULL;
-    gsize len_stdout;
-    read_proc_output(stdout_fd, L, &str_stdout, &len_stdout);
-    gchar *str_stderr = NULL;
-    gsize len_stderr;
-    read_proc_output(stderr_fd, L, &str_stderr, &len_stderr);
+    lua_State *L = (lua_State *)data;
 
     // fetch callbacks table
     lua_pushliteral(L, LUAKIT_CALLBACKS_REGISTRY_KEY);
@@ -608,11 +567,9 @@ void async_callback_handler(GPid pid, gint status, gpointer data) {
     }
     lua_pushinteger(L, exit_type);
     lua_pushinteger(L, exit_num);
-    lua_pushlstring(L, str_stdout, len_stdout);
-    lua_pushlstring(L, str_stderr, len_stderr);
-    g_free(str_stdout);
-    g_free(str_stderr);
-    lua_call(L, 4, 0);
+    if (lua_pcall(L, 2, 0, 0)) {
+        g_fprintf(stderr, "%s\n", lua_tostring(L, -1));
+    }
 
     // free callbacks[pid]
     lua_pushlightuserdata(L, (void *)pid);
@@ -645,38 +602,30 @@ luaH_luakit_spawn(lua_State *L)
         g_strfreev(argv);
         lua_error(L);
     }
-    proc_callback_data_t *cb = g_new0(proc_callback_data_t, 1);
-    cb->L = L;
-    g_spawn_async_with_pipes(NULL, argv, NULL, 
+    g_spawn_async(NULL, argv, NULL,
             G_SPAWN_DO_NOT_REAP_CHILD|G_SPAWN_SEARCH_PATH, NULL, NULL, &pid,
-            NULL, &(cb->stdout_fd), &(cb->stderr_fd), &e);
+            &e);
     g_strfreev(argv);
     if(e)
     {
         lua_pushstring(L, e->message);
         g_clear_error(&e);
-        g_free(cb);
         lua_error(L);
     }
     int CB_FUNC_IDX = 2;
 
     int cb_type = lua_type(L, CB_FUNC_IDX);
-    if (cb_type == LUA_TNONE) {
-        g_free(cb); // no callback, hence no callback data needed
-        return 0;
-    }
+    if (cb_type == LUA_TNONE) return 0;
 
-    if (cb_type != LUA_TFUNCTION) {
-        g_free(cb);
+    if (cb_type != LUA_TFUNCTION)
         luaL_typerror(L, CB_FUNC_IDX, lua_typename(L, LUA_TFUNCTION));
-    }
 
     lua_pushliteral(L, LUAKIT_CALLBACKS_REGISTRY_KEY);
     lua_rawget(L, LUA_REGISTRYINDEX);
     lua_pushlightuserdata(L, (void *)pid);
     lua_pushvalue(L, CB_FUNC_IDX);
     lua_rawset(L, -3);
-    g_child_watch_add(pid, async_callback_handler, cb);
+    g_child_watch_add(pid, async_callback_handler, L);
     return 0;
 }
 
