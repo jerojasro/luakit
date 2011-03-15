@@ -57,9 +57,8 @@ local function get_temp_filename(uri)
 end
 
 local function get_editor()
-    -- TODO write me. refactor editor selection, so it is a function. don't forget
-    -- to check other lua modules that do use the editor (formfiller)
-    return "gvim -f"
+    local editor = globals.editor or (os.getenv("EDITOR") or "vim")
+    return editor
 end
 
 local function call_external_editor(w)
