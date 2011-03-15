@@ -78,7 +78,7 @@ local function call_external_editor(w)
     fd:close()
     
     local editor_cmd = get_editor()
-    local function editor_callback(n, m, stdout, stderr)
+    local function editor_callback(n, m)
         view_idx = w.tabs:indexof(view)
         if not view_idx then
             w:warning("You closed the tab, dude/gal!")
